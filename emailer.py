@@ -5,55 +5,13 @@
 #=======================================================================================================
 # HISTORY:   |  CHANGE:
 # Date:      |
-# 6-Mar-2017 |  Osoba która zmarła ma wyświetloną datę śmierci 
-# 6-Mar-2017 |  Poprawione wpisywanie pustych dat "bapt,deces' do mySQL jako NULL jezeli wartość z CGI jest ''
-# 3-Sep-2023 |  Dopisane staropolskie relacje 
-# 4-Sep-2023 |  WWersja English 
-# 9-Sep-2023 !  Moved franslation dictionaries to external class DrzewoTranslate.py 
-#10-Sep=2023 !  Arttempt to use cookies to select language "PL", "EN", "SP"i and also save in new databse 
-#            !  field pref_lang.   .  
-#15-Sep=2023 !  Added dates of birth to the tree.  Added different default picture depending on age 
+# 28-Sep-2023|  Wersja Orginalna 
 #            !  
 
 
 '''
 PURPOSE:
-  This scripts is executable as Web CGI to monitor list of 
-  linux machines accessible with root password
-
-  This scripts should be executables as 
-  http://localhost/cgi-bin/LabMonitorTool.py 
-
-  From Menu you create list of nodes IPs, 
-  create list of executable Linux commands. 
-  Execute requests to all machines by clicking on Execute 
-  And displaying Results 
-
-REQUIREMENTS:
-a. INSTALLED SOFTWARE 
-   Linux Ubuntu 12.04 or newer
-   apache2 - web server 
-   python2.7 installed as CGI for Apache2
-   mysql-server database server accessible with password root/root
-
-a. PYTHON PACKAGES
-   python-mysqldb  access to MYSQL from python 
-   python-htmlgen  generating HTML web pages from python 
-
-b. LIST OF FILES: 
-   cgi-bin/all_for_web.py -executig threaded ssh calls to nodes and storing results in /tmp/all.db
-   cgi-bin/HTMLGen.py -customized HTMLgen python library  
-   cgi-bin/mmsgennodes.sql -Database containing list of IPs, list of Commands and results 
-                    storrage. This file is used only for SQL mmsgennodes database initialization 
-   css/html.css - stylesheets 
-   css/jq.css
-   css/style.css
-
-   js/sortable.js - java scripts for displaying sortable table 
-
 '''
-
-from CookieLoginClass import LoginCookie
 import MySQLdb as mdb
 import os, sys
 import os.path
@@ -61,41 +19,45 @@ import datetime
 from datetime import date
 
 
+
+fromaddr = 'admin@drzewo.me'
+toaddrs  = 'kris.pakula@gmail.com'
+
+
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email.mime.application import MIMEApplication
+
 import time
 import re
 # Import modules for CGI handling 
-import cgi 
-import cgitb;  cgitb.enable(display=1, logdir=".", format="html")
-
-import Relations
 
 import HTMLgen
 import HTMLGen
 import hashlib
 
-import Leafs 
 
 SCRIPT = os.path.basename(sys.argv[0])
+SCRIPT = "https://drzewo.me/tr/dr.py"
 MYSQL_DATABASE_NAME='nukedemo'
 MYSQL_USER='kpakula'
 MYSQL_PASSWORD='rmld29psf3697'
 TABLE  = 'nuke_genealogy'
 EMAILS_TO_SEND_TABLE = 'emails_to_send'
-HISTORY = 'nuke_history'
-LOGIN_HISTORY = 'login_history'
 
 MYSQL_USER='root'
 MYSQL_PASSWORD='rmld29'
 TRANSLATIONS = 'translations'
-PROBLEMS_REPORT_TABLE = 'problems_report'
 THEMES_TABLE_NAME = 'themes'
 SQL_LIMIT = 0
 
-PATH_TO_PICTURES = 'image/drzewo'
+PATH_TO_PICTURES = 'https:/drzewo.me/tr/image/drzewo'
 PATH_TO_TREE=""
 
 # Locations of images on the server
-IMAGES = "images"
+IMAGES = "https://drzewo.me/tr/images"
 
 GENERATIONS_LIMIT = 6
 
@@ -107,7 +69,6 @@ IMAGE_PICTURE_SIZE = 16
 
 VALID_LANGUAGES = {"PL":"Polish", "EN":"English", "SP":"Spanish"}
 DEFAULT_LANGUAGE = 'PL'
-IMAGE_LOCATION = "image/"
 
 GROUNUP_AGE_IN_DAYS = 5800
 
@@ -139,31 +100,22 @@ _Z = u"\xAC"
 
 import logging 
 
-##now we will Create and configure logger 
-#logging.basicConfig(filename="drzewo.log", 
-#					format='%(asctime)s %(message)s', 
-#					filemode='w') 
 
 #now we will Create and configure logger 
-logging.basicConfig(filename="drzewo.log", 
-					format='%(asctime)s %(message)s') 
+logging.basicConfig(filename="emailer.log", format='%(asctime)s %(message)s') 
 
-#Let us Create an object 
+##Let us Create an object 
 logger=logging.getLogger() 
 
 #Now we are going to Set the threshold of logger to DEBUG 
 logger.setLevel(logging.DEBUG) 
 
-logger.info("INFO: Drzewo.me is run") 
-
 
 hidden=             ['id', 'uid', 'pere','mere','genre','conjoint','bapt','bapt_plac','epouse','deces_plac','picture_id','facebook_id','owner_uid','change_time','SUPERUSER','theme' ]
 hidden_for_editing= ['id', 'uid', 'pere','mere','genre','conjoint','bapt','bapt_plac','epouse','owner_uid','change_time','facebook_id','picture_id', 'SUPERUSER', 'theme', 'pref_lang']
 hidden_for_editing_by_myself= ['id', 'uid', 'pere','mere','genre','conjoint','bapt','bapt_plac','epouse','owner_uid','change_time','facebook_id','picture_id', 'SUPERUSER']
-hidden_for_editing_by_super=  ['id', 'uid','genre','bapt','bapt_plac','epouse','change_time','facebook_id','picture_id']
+hidden_for_editing_by_super=  ['id', 'uid','genre','bapt','bapt_plac','epouse','owner_uid','change_time','facebook_id','picture_id']
  
-
-fields_hiddable = ['address', 'email', 'phone']
 
 
 dates_items = ['bapt', 'naissance', 'deces'] #Pola w bazie danych ktore sa datami
@@ -172,53 +124,9 @@ RADIUS = 3
 COLOR = 'yellow'
 STEM = 0.0
 
-
-script_for_collapsing = '\
-<script>\n\
-var coll = document.getElementsByClassName("collapsible");\n\
-var i;\n\
-for (i = 0; i < coll.length; i++) {\n\
-  coll[i].addEventListener("click", function() {\n\
-    this.classList.toggle("active");\n\
-    var content = this.nextElementSibling;\n\
-    if (content.style.display === "block") {\n\
-      content.style.display = "none";\n\
-    } else {\n\
-      content.style.display = "block";\n\
-    }\n\
-  });\n\
-}\n\
-</script>\n\
-'
-
-style_for_collapsing = '\n\
-.collapsible {\n\
-  background-color: #AAFFBB;\n\
-  color: black;\n\
-  cursor: pointer;\n\
-  padding: 8px;\n\
-  width: 100%;\n\
-  border: none;\n\
-  text-align: left;\n\
-  outline: none;\n\
-  font-size: 12px;\n\
-  padding: 12px;\n\
-}\n\
-.active, .collapsible:hover {\n\
-  background-color: #88DD99;\n\
-}\n\
-.content {\n\
-  padding: 0 8px;\n\
-  display: none;\n\
-  overflow: hidden;\n\
-  background-color: #f1f1f1;\n\
-} \n\
-'
-
+import Relations
 import collections
 
-def c_lng(key):
-    return key
  
 class Dict(collections.MutableMapping):
     """A dictionary that applies an arbitrary key-altering
@@ -344,20 +252,43 @@ class Theme(collections.MutableMapping):
             return self.store[key]
         return ''
     
-class FamilyTree:
-    def __init__(self, login_uid):
+class Server:
+    def __init__(self, server_id):
+        self.id = server_id
+        self.log = ''
+        self.password = ''
+        
+    def login(self, login, password):
+        self.log = login
+        self.password = password
+        self.prin("LOGGED TO SERVER AS: %s %s"%(self.log, self.password))
+        
+    def sendmail(self, sender, recipient , text):
+        self.prin("EMAIL SEND FROM %s"%sender)
+        self.prin("EMAIL   SEND TO %s"%recipient)
+        self.prin("ABOUT %s"%text)
+        self.prin("ON SERVER %s LOGGED AS %s %s"%(self.id, self.log, self.password))
+    
+    def quit(self): 
+        self.prin("SERVER %s QUITED"%self.id )
+        
+    def prin(self, text):
+         pass
+#        print text
+
+    
+    
+class Emailer:
+    def __init__(self, login_uid, pref_lang):
         self.con = mdb.connect('localhost',MYSQL_USER,MYSQL_PASSWORD,MYSQL_DATABASE_NAME)
         self.cur = self.con.cursor()
         self.column_names = []
         self.translations_column_names = []
-        self.problems_column_names = []
         self.get_column_names()
-        self.login_dict = self.get_dict(login_uid)
-        self.idict = {}
+        self.login_dict = self.get_login_dict(login_uid)
+        self.idict = Dict()
         self.owner_uid = ''
-        self.svg = ''
-        self.prefered_language = 'PL'
-        self.translator = {} 
+        self.prefered_language = pref_lang
         self.match_string = ''
         self.descendants_counter =0
         self.all_db = {}
@@ -365,19 +296,128 @@ class FamilyTree:
         self.themes = {}
         self.theme = Theme()
         self.rate = 0 
+        self.server = "" # smtplib.SMTP_SSL('smtp.titan.email:465')
+
+    
+    
+    def run_emails(self):
+        
+        username = 'admin@drzewo.me'
+        password = 'Rmld@3697'
+
+        # Flip here for test mode 
+        self.server = smtplib.SMTP_SSL('smtp.titan.email:465')
+        # self.server = Server('smtp.titan.email:465')
+        
+        
+        self.server.login(username, password)
+        
+        logging.basicConfig(filename="emailer.log", format='%(asctime)s %(message)s')         
+    
+        # print "Running run_email"
+        sql = "SELECT * FROM %s WHERE `date_send`='' ORDER BY `id` ASC LIMIT 1;"%(EMAILS_TO_SEND_TABLE)
+        
+        # print sql
+        row = self.sql_execute(sql)
+        
+        for person in row:
+            k = person
+            # self.login_dict.value('uid'), idict.value('uid')
+            email_id = k[0]
+            email = k[1]
+            from_person = k[2]
+            to_person = k[3]
+            
+            self.run_one_email(email, from_person, to_person, email_id)
+            # print "Running inside the loop  %s"%(str(person))
+        
+        self.server.quit()
+        
+        
+        
+    def run_one_email(self, email, sender, recipient, email_id):   
+        
+        Sender = self.get_dict(sender)
+        Recipient = self.get_dict(recipient)
+        self.login_dict = Recipient
+        
+        self.set_theme()
+        self.set_prefered_language()
+        
+        text = self.get_email_text(Sender, Recipient, email_id)
+
+        msg = MIMEMultipart()
+
+        first_name = Sender['prenom']
+        last_name = Sender['nom']
+
+        msg['Subject'] = 'Zaproszenie do Drzewa od %s %s'%(self.kogo(Sender),last_name)
+        msg['From'] = "admin@drzewo.me"
+        msg['To'] = email
+
+        part1 = MIMEText(text, 'html') 
+
+        msg.attach(part1)
+        
+        self.server.sendmail("admin@drzewo.me", email, msg.as_string())
+        # print "Running one email:%s sender:%s recipient:%s email id:%s"%(email, sender, recipient, email_id)
+
+        date_send = datetime.datetime.strftime(datetime.datetime.now(), '%Y-%m-%d %H:%M:%S')
+
+        sql = "UPDATE `%s` SET `date_send`='%s'  WHERE `id`='%s' ;"%(EMAILS_TO_SEND_TABLE, date_send, email_id )
+        # print sql
+        
+        
+        # Comment statement below to prevent marking in database the email was sent
+        # This way emailer.py keeps resending it 
+        self.sql_execute_and_commit(sql)
+        
+        time.sleep(1)
+
+   
+    def get_email_text(self, Sender, Recipient, emailid):
+        
+        text = self.main(Sender, Recipient, emailid) 
+        
+        return text                 
     
         # Open connection to MySQL       
-    def get_dict(self, uid):     
-        sql = "SELECT * from %s WHERE uid='%s';"%(TABLE, uid)
+    def get_login_dict(self, login_uid):     
+        sql = "SELECT * from %s WHERE uid='%s';"%(TABLE, login_uid)
         logger.info("INFO: Trying to execute SQL: %s"%sql)
         row = self.sql_execute(sql)
         logger.debug("DEBUG:SQL returned %s"%row)
-        return self.convert_sqlrow_to_dict(row[0])    
+        self.login_dict = self.convert_sqlrow_to_dict(row[0])    
 
     def c_lang(self, label):  
         
         label= re.sub(' +', ' ', label) # remove double spaces
         label= re.sub("'", "", label)   # remove double spaces
+        label = label.lstrip()
+        label = label.rstrip()
+        
+        
+        PREF_LANG = self.prefered_language
+            
+        sql = 'SELECT * FROM translations WHERE lang = "%s" AND label = "%s" ;'%(PREF_LANG, label)
+        row = self.sql_execute(sql)
+        
+        l = ()
+        if type(row) != type(l):
+            return "no translation in %s {%s}"%(self.login_dict['pref_lang'], label)
+
+        if len(row) == 0:
+            return "no list translation in %s {%s}"%(self.login_dict['pref_lang'], label)
+        
+        if len(row) > 1:
+            logger.error("ERROR: MORE THAT ONE TRANSLATION %s"%str(row))
+            logger.error("ERROR: Translation not found for [%s] in language:%s"%(label, self.prefered_language)) 
+            return "multiple translations in %s {%s}"%(self.login_dict['pref_lang'], label)
+        
+        row = row[0]
+        return row[2]    
+        
+    def c_lang_the_oldway(self, label) :   
         
         d = self.get_dict_from_translations(label)
         
@@ -391,20 +431,6 @@ class FamilyTree:
                 logger.error("ERROR: Defaulted to translation [%s]"%(label))
                 return "[%s]"%label
       
-    def get_dict_from_translations(self, label):
-        label= re.sub(' +', ' ', label)        
-        if label in self.translator.keys():
-            d = self.translator[label]   # Returning dictionary item which will help in case of editing   
-        else: 
-            # Create empty
-            d = Dict()
-            d['lang'] = self.login_dict['pref_lang']
-            d['label'] = "%s"%label 
-            d['hide'] = 0
-            d['translation'] = "[%s]"%label
-            d['auto_increment'] = '0'
-            d['Date'] = datetime.datetime.strftime(datetime.datetime.now(), '%Y-%m-%d %H:%M:%S')
-        return d   
     
         
     def get_new_uid(self):
@@ -442,6 +468,9 @@ class FamilyTree:
         return after    
             
     def set_theme(self): 
+
+        # print "THEME SELECTED BY RECIPIENT %s"%self.login_dict['theme']
+
         sql = 'DESCRIBE %s'%THEMES_TABLE_NAME
         column_names = self.sql_execute(sql)
         
@@ -471,34 +500,6 @@ class FamilyTree:
             logger.info("INFO: Theme row %s "%(str(themes_row)))                  
             d[theme[0]] = theme[1]                                                                                 
         self.themes = d   
-    
-    def set_translator(self):
-        PREF_LANG = self.prefered_language
-            
-        sql = 'SELECT * FROM translations WHERE lang = "%s" ;'%(PREF_LANG)
-        all_single_language_tuples = self.sql_execute(sql)
-        
-        d = {}
-        dx = {}
-        
-        for one_term in all_single_language_tuples:            
-            i = 0
-            d = {}
-            for column_name in self.translations_column_names:
-                if column_name == 'label':
-                    before = one_term[1]
-                    after = self.label_cleanup(before) 
-                    d[column_name] = after
-                else:    
-                    d[column_name] = one_term[i] 
-                    
-                d[column_name] = one_term[i]     
-                i += 1 
-                
-            dx[after] = d 
-            
-        # Actually setup 2 translators
-        self.translator = dx   
         
              
     def sql_execute(self, sql):
@@ -506,7 +507,7 @@ class FamilyTree:
         try:
             self.cur.execute(sql)
             row = self.cur.fetchall()   
-        except mdb.Error as e:
+        except mdb.Error, e:
             logger.error("ERROR: Execution of SQL failed: %s"%sql)
             if self.con:
                 self.con.rollback()
@@ -523,7 +524,7 @@ class FamilyTree:
             self.cur.execute(sql)
             self.con.commit()
             
-        except mdb.Error as e:
+        except mdb.Error, e:
             logger.error("ERROR: Execution of SQL failed: %s"%sql)
             if self.con:
                 self.con.rollback()
@@ -534,70 +535,7 @@ class FamilyTree:
             
         return 
 
-    def show_menu(self, uid):
-        idict = self.get_dict(uid)
-        if self.login_dict.g() :
-            #gender_form = 'y'
-            gender_form = ''
-        else:
-            # gender_form = 'a'
-            gender_form = ''
-                  
-            
-        self.set_prefered_language()
-        self.set_translator()
-        self.set_themes() 
-        menu = HTMLgen.Div(id = 'menu') 
-        logged_as = self.c_lang(  "You are logged as") 
-        text = "%s: %s %s"%(logged_as, self.login_dict['prenom'], self.login_dict['nom'])        
-        
-        text1 = self.c_lang("See the Tree")
-
-        menu_text= [('GENEALOGY', TABLE),( " %s "%text1, PATH_TO_TREE), ("LOGOUT", ""),("%s"%(text), "") ]  
-        
-        
-        if self.am_i_superuser():
-            url = "%s?action=list"%(SCRIPT)
-            image = "%s/%si_tools.png"%(IMAGES, self.theme['directory'])
-            icon = HTMLgen.Image( image, width="30", height="30", alt="Structure :")
-            href = HTMLgen.Href( url, icon, target="new")
-            menu.append(href)
-            href = HTMLgen.Href( url, menu_text[0][0])
-            menu.append(href)
-    
-
-        url = "%s?action=show_tree&uid=%s"%(SCRIPT, uid)  
-        image = "%s/%si_tree.png"%(IMAGES, self.theme['directory'] )
-        icon = HTMLgen.Image( image, width="30", height="30", alt="Structure :")
-        href = HTMLgen.Href(url, icon, target="new")
-        menu.append(href)
-        href = HTMLgen.Href(url, menu_text[1][0], target="new")
-        menu.append(href)
-        
-        # menu.append(" ")
-    
-        url = "%s?action=logout"%(SCRIPT)
-        image = "%s/%si_logout.png"%(IMAGES, self.theme['directory'] )
-        icon = HTMLgen.Image( image, width="30", height="30", alt="Structure :")
-        href = HTMLgen.Href(url, icon, target="new")
-        menu.append(href)
-        href = HTMLgen.Href(url, menu_text[2][0], target="new")
-        menu.append(href)   
-     
-        url = "%s?action=show&uid=%s"%(SCRIPT, self.login_dict['uid'])
-        logged_user = "%s %s "%(self.login_dict['prenom'], self.login_dict['nom'])
-        image = "%s/%si_home.png"%(IMAGES, self.theme['directory'] )
-        icon = HTMLgen.Image( image, width="30", height="30", alt="Structure :")
-        
-        href = HTMLgen.Href(url, icon, target="new")
-        menu.append(href)
-        href = HTMLgen.Href(url, menu_text[3][0], target="new")
-        menu.append(href)
-        
-        image = HTMLgen.Image('%s'%(self.get_picture(self.login_dict)), width="30", height="40")
-        href = HTMLgen.Href(url, image )
-        menu.append(href)
-        return menu 
+   
     
     def show_table(self, rows, order ):
         # not used     
@@ -608,8 +546,8 @@ class FamilyTree:
         # sortable by SQL statement 
         table = HTMLgen.Table(border=0, cell_spacing=0, heading=h, width=None, body=[])
     
-        # tb = HTMLGen.Table(border=0, cell_spacing=0, heading=None, width=None, body=[])
-        # tr = []
+        tb = HTMLGen.Table(border=0, cell_spacing=0, heading=None, width=None, body=[])
+        tr = []
     
         dmain.append(ddemo)
         ddemo.append(table)
@@ -642,30 +580,6 @@ class FamilyTree:
         except:
             logger.error("ERROR: UID not found in DB during execution of get_dict: %s"%sql)
             return 
-        
-#    def read_all_db(self, key):
-#        # Return complete database to memory to reduce mySQL burden 
-#        # key is not used yet 
-#
-#        sql = "SELECT * from %s WHERE 1;"%(TABLE)
-#        self.sql_execute(sql)
-#        all_db_tuples = self.cur.fetchall()
-#
-#        
-#        db = {}
-#
-#        for one_person in all_db_tuples:            
-#            i = 0
-#            d = Dict()
-#            for column_name in self.column_names:
-#                if column_name == 'uid':
-#                    uid = one_person[1]
-#                d[column_name] = one_person[i]   
-#                i += 1 
-#            UID = "%s"%uid    
-#            db[UID] = d       
-#            
-#        self.all_db = db
              
     def get_tabela_grandparents(self, text, idict, uid):
         
@@ -848,7 +762,8 @@ class FamilyTree:
         height =int(4*scale)
  
         
-        td1 = HTMLgen.TD()
+        td1 = HTMLgen.TD()      
+        # td1.append(uid) 
         td = HTMLgen.TD()
         tr = HTMLgen.TR()  
         tb = HTMLgen.TableLite(border=0, cell_spacing=1, width=None, body=[])
@@ -942,10 +857,10 @@ class FamilyTree:
         
         elif self.prefered_language == "PL": 
             if idict.g(): 
-                if first_name[-2:] in ['e\xB3'] :   # if first_name Paweł   
-                    return "%s\xB3a"%(first_name[:-2])   # return Pawła
+                if first_name[-2:] == ['eł'] :   # if first_name Paweł   
+                    return "%ła"%(first_name[:-2])   # return Pawła
 
-                if first_name[-2:] in ['er'] :   # if first_name Aleksander   
+                if first_name[-2:] == ['er'] :   # if first_name Aleksander   
                     return "%sra"%(first_name[:-2])   # return Aleksandra                
                 
                 if first_name[-2:] in ['ek']:   # if first_name in ['Jacek','Wojtek','Zbyszek','Przemek']:  
@@ -954,16 +869,13 @@ class FamilyTree:
                 if first_name[-1:] in ['y']:   # if first_name in ['Jerzy','Wincenty','Konstanty',itp]: 
                     return "%sego"%(first_name[:-1]) #Jerzego, Wincentego, Konstantego , Cezarego 
 
-                # Hipolita , Adama, Izydora, Romana, Piotra, Przemysława, Jakuba, Oskara, Tadeusza            
+                # Hipolita , Adama, Izydora, Romana, Piotra, Przemysława, Jakuba, Oskara             
                 return "%sa"%(first_name)
             
             else: 
                 
-                if first_name[-2:] in ['ca','da','fa','ma','na','pa','ra','ta','wa','za']:  #  Krystyna, Bożena , Anna, Paulina, Honorata, Zuza, Stanisława, 
+                if first_name[-2:] in ['na', 'fa', 'pa', 'ra', 'ta', 'wa', 'za']:  #  Krystyna, Bożena , Anna, Paulina, Honorata, Zuza, Stanisława, 
                     return "%sy"%(first_name[:-1])  #  Krystyny , Bożeny  , Anny , Pauliny 
-
-                if first_name[-2:] in ['ia','ja']:  #  Sonia, Patrycja  
-                    return "%si"%(first_name[:-1])  #  Sonii, Patrycja 
                         
                 return "%si"%(first_name[:-1]) # Alicji , Dominiki, Agnieszki , Jadwigi , Zofii, Maria, Marii
             
@@ -1172,9 +1084,8 @@ class FamilyTree:
         # Formularz do wysyłania zdjęć pojawi się tylko wtedy gdy masz pozwolenie na edycję
         # form to upload pictures 
         td_picture_form = HTMLgen.TD(border="0")
-        
         form = HTMLgen.Form( enctype="multipart/form-data", cgi="%s"%SCRIPT)
-#       form.append( HTMLgen.BR())
+        form.append( HTMLgen.BR())
         form.append( HTMLgen.Input( type='file', name="file"))
         form.append( HTMLgen.Input( type='hidden', name="file_name", value="%s"%(idict.value('id'))))
         form.append( HTMLgen.Input( type='hidden', name="uid", value="%s"%(idict.value('uid'))))
@@ -1182,65 +1093,35 @@ class FamilyTree:
         form.append( HTMLgen.Input( type='hidden', name="profile_picture", value="YES"))
 
         dd_upload_picture = HTMLgen.Div(id = 'upload')
-#        text = self.c_lang("change profile picture")      
-#        td_picture_form.append(text)
+        text = self.c_lang("change profile picture")      
+        td_picture_form.append(text)
         dd_upload_picture.append(form)
-
-        if True:  # Here is all collapsible deal
-            table = HTMLgen.TableLite()
-            tr = HTMLgen.TR()
-            td = HTMLgen.TD()
-            div_collapsible = HTMLgen.Div( id = 'content', style="display: none" )
-            div_collapsible.append(dd_upload_picture)    
-            div = HTMLgen.Div()
-            div.append(self.c_lang("Instructions"))  
-            div_collapsible.append(div)
-            button = HTMLGen.Button(type="button", Class="collapsible")
-            src = "%s/%si_profile.png"%(IMAGES, self.theme['directory'])
-            image = HTMLgen.Image( src, width="30px")
-            icon = HTMLGen.Icon(Class="icon")
-            icon.append(image)
-            button.append(icon)
-            button.append(self.c_lang("add profile picture"))
-            td.append(button)
-            td.append(div_collapsible)  
-            tr.append(td)
-            table.append(tr)
-                
-
-            any_picture_form = HTMLgen.Form( enctype="multipart/form-data", cgi="%s"%SCRIPT)
-            any_picture_form.append( HTMLgen.Input( type='file', name="file"))
-            any_picture_form.append( HTMLgen.Input( type='hidden', name="file_name", value="%s"%(idict.value('id'))))
-            any_picture_form.append( HTMLgen.Input( type='hidden', name="uid", value="%s"%(idict.value('uid'))))
-            any_picture_form.append( HTMLgen.Input( type='hidden', name="prefix", value="YES"))
-            any_picture_form.append( HTMLgen.Input( type='hidden', name="profile_picture", value="NO"))
-
+        td_picture_form.append(dd_upload_picture)
         
+        div = HTMLgen.Div()
+        div.append(self.c_lang("Instructions"))
         
-            dd_upload_any_picture = HTMLgen.Div(id = 'upload')   
-            dd_upload_any_picture.append(any_picture_form)
+                                       
+        td_picture_form.append(div)            
 
-            # table = HTMLgen.TableLite()
-            tr = HTMLgen.TR()
-            td = HTMLgen.TD()
-            div_collapsible = HTMLgen.Div( id = 'content', style="display: none" )
-            div_collapsible.append(dd_upload_any_picture)    
-            div = HTMLgen.Div()
-            div.append(self.c_lang("Instructions"))  
-            div_collapsible.append(div)
-            button = HTMLGen.Button(type="button", Class="collapsible")
-            src = "%s/%si_picture.png"%(IMAGES, self.theme['directory'])
-            image = HTMLgen.Image( src, width="30px")
-            icon = HTMLGen.Icon(Class="icon")
-            icon.append(image)
-            button.append(icon)
-            button.append(self.c_lang("add any picture"))
-            td.append(button)
-            td.append(div_collapsible)  
-            tr.append(td)
-            table.append(tr)
-            td_picture_form.append(table)
+
+        any_picture_form = HTMLgen.Form( enctype="multipart/form-data", cgi="%s"%SCRIPT)
+        any_picture_form.append( HTMLgen.BR())
+        any_picture_form.append( HTMLgen.Input( type='file', name="file"))
+        any_picture_form.append( HTMLgen.Input( type='hidden', name="file_name", value="%s"%(idict.value('id'))))
+        any_picture_form.append( HTMLgen.Input( type='hidden', name="uid", value="%s"%(idict.value('uid'))))
+        any_picture_form.append( HTMLgen.Input( type='hidden', name="prefix", value="YES"))
+        any_picture_form.append( HTMLgen.Input( type='hidden', name="profile_picture", value="NO"))
+
+        dd_upload_any_picture = HTMLgen.Div(id = 'upload')
+
+        td_picture_form.append(HTMLgen.BR())
         
+        text = self.c_lang("upload any picture")
+        td_picture_form.append(text)
+        
+        dd_upload_any_picture.append(any_picture_form)
+        td_picture_form.append(dd_upload_any_picture)
         
         return (td_picture_form)
 
@@ -1273,17 +1154,9 @@ class FamilyTree:
                 pass
             else:
                 tr = HTMLgen.TR()
-                
-                # Here is puting names of personal items  
                 td = HTMLgen.TD( align="right" )
                 text = self.c_lang(c)
-                
-                no_break = HTMLgen.Nobr()
-                no_break.append("%s :"%(text))
-                div = HTMLgen.Div(id = "columns")
-                div.append(no_break)
-                td.append(div)
-                
+                td.append("%s :"%(text))
                 tr.append(td)
                 # Szerokosc pola danych 300, kolor szary
                 td = HTMLgen.TD(bgcolor="#FFFFFF" , width="200")
@@ -1348,22 +1221,22 @@ class FamilyTree:
         # Tu dodaje się stopien pokrewieństwa / relation
         r = Relations.Relation()
         relation = r.get_relationship(self.login_dict.value('uid'), idict.value('uid'))    
+        ## . relation = "%s"%idict['uid'] # '.keys()
         relation = self.label_cleanup(relation)    
         
-        if relation != '':   
+        if relation <> '':   
             relation_translated = " %s "%(self.c_lang(relation))
             dd_relation = HTMLgen.Div(id = 'relation')
             
             dd_relation.append(relation_translated)
             
-            relationsip_rate = r.rate
-            if relationsip_rate > 0:  # Showing rate of relationship
+            if self.rate > 0:  # Showing rate of relationship
                 dd_rate = HTMLgen.Div(id = 'rate')
                 relative = self.c_lang('relative')
                 if not idict.value('genre') :  
                     relative = self.c_lang('relativa')
                         
-                dd_rate.append("1/%s %s"%(relationsip_rate, relative ))
+                dd_rate.append("1/%s %s"%(self.rate, relative ))
                 dd_relation.append(dd_rate)
                 logger.info ("INFO: Found relation: [%s] translated to >%s< for %s"%(relation, relation_translated, idict.value('uid')))
             
@@ -1378,25 +1251,6 @@ class FamilyTree:
             tr = HTMLgen.TR()
             td.append(dd_relation)
             
-            dict = self.get_dict_from_translations(relation)
-            
-            if self.am_i_superuser():
-                div_collapsible = HTMLgen.Div( id = 'content', style="display: none" )
-                # Editing dictionary is only for super users 
-                editing_form = self.get_translation_add_edit_form(dict)
-                
-                button = HTMLGen.Button(type="button", Class="collapsible")
-                src = "%s/%si_edit.png"%(IMAGES, self.theme['directory'])
-                image = HTMLgen.Image( src, width="30px")
-                icon = HTMLGen.Icon(Class="icon")
-                icon.append(image)
-                
-                button.append(icon)
-                
-                button.append(self.c_lang("edit relation translation"))
-                td.append(button)
-                div_collapsible.append(editing_form)
-                td.append(div_collapsible)
             tr.append(td)
             table_with_picture.append(tr)
             
@@ -1456,13 +1310,7 @@ class FamilyTree:
                         if date != "": 
                             text = self.c_lang("invitation was prepared on")
                             text = "%s %s"%(text, date)
-                            
-                            li = HTMLgen.Div()
-                            src = "%s/%si_invite.png"%(IMAGES, self.theme['directory'])
-                            image = HTMLgen.Image( src, width="30px")
-                            icon = HTMLGen.Icon(Class="icon") 
-                            icon.append(image)
-                            li.append(icon)
+                            li = HTMLGen.LI()
                             li.append(text)
                             td.append(li) 
 
@@ -1470,12 +1318,7 @@ class FamilyTree:
                         if date != "": 
                             text = self.c_lang("invitation was sent on")
                             text = "%s %s"%(text, date) 
-                            li = HTMLgen.Div()
-                            src = "%s/%si_email.png"%(IMAGES, self.theme['directory'])
-                            image = HTMLgen.Image( src, width="30px")
-                            icon = HTMLGen.Icon(Class="icon") 
-                            icon.append(image)
-                            li.append(icon)
+                            li = HTMLGen.LI()
                             li.append(text)
                             td.append(li)                           
 
@@ -1483,12 +1326,7 @@ class FamilyTree:
                         if date != "": 
                             text = self.c_lang("invitation was accepted on")
                             text = "%s %s"%(text, date)  
-                            li = HTMLgen.Div()
-                            src = "%s/%si_accepted.png"%(IMAGES, self.theme['directory'])
-                            image = HTMLgen.Image( src, width="30px")
-                            icon = HTMLGen.Icon(Class="icon") 
-                            icon.append(image)                              
-                            li.append(icon)
+                            li = HTMLGen.LI()
                             li.append(text)
                             td.append(li)                                
                     
@@ -1497,13 +1335,7 @@ class FamilyTree:
                         text = "%s %s %s"%(self.c_lang("click here to send invite to"), self.kogo(idict), self.c_lang("by email"))
                         href = HTMLgen.Href( url, text)
                         
-                        li = HTMLgen.Div()
-                        src = "%s/%si_send.png"%(IMAGES, self.theme['directory'])
-                        image = HTMLgen.Image( src, width="30px")
-                        icon = HTMLGen.Icon(Class="icon") 
-                        icon.append(image) 
-                        li.append(icon)
-
+                        li = HTMLGen.LI()
                         li.append(href)
                         td.append(li) 
                         # td.append(href)    
@@ -1514,7 +1346,7 @@ class FamilyTree:
                 # except:
                 else: 
                     text = self.c_lang("can not send invitation")
-                    li = HTMLgen.Div()
+                    li = HTMLGen.LI()
                     li.append(text)
                     td.append(li)
                     tr.append(td)
@@ -1522,30 +1354,21 @@ class FamilyTree:
             else: 
                 text1 = self.c_lang("give email address to")
                 text2 = self.c_lang("to be able send him invitation")
-                text = "%s %s %s"%(text1, self.kogo(idict), text2)
-                li = HTMLgen.Div()
-                src = "%s/%si_invite.png"%(IMAGES, self.theme['directory'])
-                image = HTMLgen.Image( src, width="30px")
-                icon = HTMLGen.Icon(Class="icon") 
-                icon.append(image) 
-                li.append(icon)
+                text = "%s %s %s"%(text1, name, text2)
+                li = HTMLGen.LI()
                 li.append(text)
                 td.append(li)
                 tr.append(td)
                 table_footer.append(tr)
         else:    
-            li = HTMLgen.Div()
-            src = "%s/%si_email.png"%(IMAGES, self.theme['directory'])
-            image = HTMLgen.Image( src, width="30px")
-            icon = HTMLGen.Icon(Class="icon") 
-            icon.append(image) 
-            li.append(icon)
-            
+            li = HTMLGen.LI()
             li.append(self.c_lang("this person is not receiving emails"))
             td.append(li)
             tr.append(td)
             table_footer.append(tr)
-
+            
+        
+        
         tr = HTMLgen.TR()
         if idict.value('owner_uid') >0 :
             try:
@@ -1556,12 +1379,7 @@ class FamilyTree:
                 href = HTMLgen.Href( url, name)
                 
                 text = self.c_lang("this record is owned by")
-                li = HTMLgen.Div()
-                src = "%s/%si_home.png"%(IMAGES, self.theme['directory'])
-                image = HTMLgen.Image( src, width="30px")
-                icon = HTMLGen.Icon(Class="icon") 
-                icon.append(image) 
-                li.append(icon)
+                li = HTMLGen.LI()
                 li.append(" %s "%text)
                 li.append(href )
                 
@@ -1577,12 +1395,7 @@ class FamilyTree:
         
         #PL td.append("wpis ostatnio zmieniony : %s"%(idict.value('change_time')))
         text = self.c_lang("this record was last updated on")  
-        li = HTMLgen.Div()
-        src = "%s/%si_calendar.png"%(IMAGES, self.theme['directory'])
-        image = HTMLgen.Image( src, width="30px")
-        icon = HTMLGen.Icon(Class="icon") 
-        icon.append(image) 
-        li.append(icon)
+        li = HTMLGen.LI()
         li.append("%s : %s"%(text, idict.value('change_time')))
         td.append(li)
         
@@ -1595,82 +1408,56 @@ class FamilyTree:
                 text = self.c_lang( "Editing is allowed")
                 
                 msg = " %s : %s"%(text, self.msg)
-                href = HTMLgen.Href(url, msg)
+                href = HTMLgen.Href(url, msg, target="popup", onClick="window.open('%s','name','width=900,height=600')"%url)
                 tr = HTMLgen.TR()
                 td = HTMLgen.TD( align="left" )
-                
-                
-                li = HTMLgen.Div()
-                src = "%s/%si_write.png"%(IMAGES, self.theme['directory'])
-                image = HTMLgen.Image( src, width="30px")
-                icon = HTMLGen.Icon(Class="icon") 
-                icon.append(image) 
-                li.append(icon)
-                li.append(href)
-                
-                
-                td.append(li)
+                td.append(href)
                 tr.append(td)
                 table_footer.append(tr)
                 to_addr = idict.value('email')
-                if  self.am_i_superuser() :
-                    uid = str(idict.value('uid'))
-                    key = self.get_key(uid)
-                    #PL msg = 'Identyfikator: %s Klucz: %s  '%(uid, key) 
-                    text = self.c_lang( "Identifier"   )       
-                    text1 = self.c_lang("Key")
-                    msg = '%s: %s %s: %s  '%(text, uid, text1, key) 
-                    tr = HTMLgen.TR()
-                    td = HTMLgen.TD( align="left" )
-                    td.append(msg)
-                    tr.append(td)
-                    table_footer.append(tr)
-                    
-                    if  to_addr.find('@') > 0 :
-                        dedit_item.append(HTMLgen.BR())
-                        imie = "%s %s"%(idict.value('prenom'), idict.value('nom'))
-                        ID = idict.value('uid')
-                        key = self.get_key(ID)
-                        msg = self.get_message(imie, ID, self.get_key(ID))
-                        
-                        text = self.c_lang( "Invitation to the Tree")
-                        text2 = self.c_lang("send email to")
-                        mail = HTMLGen.MailTo( address="%s"%(to_addr), subject=text, body=msg, text="%s %s"%(text2, imie))
-                        tr = HTMLgen.TR()
-                        td = HTMLgen.TD( align="left" )
-                        
-                        li = HTMLgen.Div()
-                        src = "%s/%si_envelope.png"%(IMAGES, self.theme['directory'])
-                        image = HTMLgen.Image( src, width="30px")
-                        icon = HTMLGen.Icon(Class="icon") 
-                        icon.append(image) 
-                        li.append(icon)
-                        li.append(mail)
-                        
-                        
-                        td.append(li)
-                        tr.append(td)
-                        table_footer.append(tr)
-                        
-                    url = "%s?action=login&uid=%s&key=%s"%(SCRIPT, uid, key)
-                                              
-                    text = "Zmiana loginu"
-                    text = self.c_lang( "Change the login")
-                    li = HTMLgen.Div()
-                    src = "%s/%si_man.png"%(IMAGES, self.theme['directory'])
-                    image = HTMLgen.Image( src, width="30px")
-                    icon = HTMLGen.Icon(Class="icon") 
-                    icon.append(image) 
-                    li.append(icon)
-                                              
-                    href = HTMLgen.Href( url, text)
-                    li.append(href)
-                    
-                    tr = HTMLgen.TR()
-                    td = HTMLgen.TD( align="left" )
-                    td.append(li)
-                    tr.append(td)
-                    table_footer.append(tr)
+#                if  self.am_i_superuser() :
+#                    uid = str(idict.value('uid'))
+#                    key = self.get_key(uid)
+#                    #PL msg = 'Identyfikator: %s Klucz: %s  '%(uid, key) 
+#                    text = self.c_lang( "Identifier"   )       
+#                    text1 = self.c_lang("Key")
+#                    msg = '%s: %s %s: %s  '%(text, uid, text1, key) 
+#                    tr = HTMLgen.TR()
+#                    td = HTMLgen.TD( align="left" )
+#                    td.append(msg)
+#                    tr.append(td)
+#                    table_footer.append(tr)
+#                    
+#                    if  to_addr.find('@') > 0 :
+#                        dedit_item.append(HTMLgen.BR())
+#                        imie = "%s %s"%(idict.value('prenom'), idict.value('nom'))
+#                        ID = idict.value('uid')
+#                        key = self.get_key(ID)
+#                        msg = self.get_message(imie, ID, self.get_key(ID))
+#                        
+#                        text = self.c_lang( "Invitation to the Tree")
+#                        text2 = self.c_lang("send email to")
+#                        mail = HTMLGen.MailTo( address="%s"%(to_addr), subject=text, body=msg, text="%s %s"%(text2, imie))
+#                        tr = HTMLgen.TR()
+#                        td = HTMLgen.TD( align="left" )
+#                        td.append(mail)
+#                        tr.append(td)
+#                        table_footer.append(tr)
+#                        
+#                    url = "%s?action=login&uid=%s&key=%s"%(SCRIPT, uid, key)
+#                                              
+#                    text = "Zmiana loginu"
+#                    text = self.c_lang( "Change the login")
+#                    li = HTMLGen.LI()
+#                                              
+#                    href = HTMLgen.Href( url, text)
+#                    li.append(href)
+#                    
+#                    tr = HTMLgen.TR()
+#                    td = HTMLgen.TD( align="left" )
+#                    td.append(li)
+#                    tr.append(td)
+#                    table_footer.append(tr)
             else:
                 tr = HTMLgen.TR()
                 td = HTMLgen.TD( align="left" )
@@ -1695,63 +1482,12 @@ class FamilyTree:
         td = HTMLgen.TD( align="left", colspan="3" )
         
         
-        button = HTMLGen.Button(type="button", Class="collapsible")
-        src = "%s/%si_more.png"%(IMAGES, self.theme['directory'])
-        image = HTMLgen.Image( src, width="30px")
-        icon = HTMLGen.Icon(Class="icon")
-        icon.append(image)
-        
-        button.append(icon)
-        button.append(self.c_lang("details"))
-        
-        td.append(button)
-        div_collapsible = HTMLgen.Div( id = 'content' , style="display: none" ) 
-        
-        
-        
-        div_collapsible.append(table_footer)
-        
-        #+++++++++++++++++++++++++++++++++++++++++++++
-        if True: 
-            div = HTMLgen.Div()
-            new_button = HTMLGen.Button(type="button", Class="collapsible")
-            src = "%s/%si_report.png"%(IMAGES, self.theme['directory'])
-            image = HTMLgen.Image( src, width="30px")
-            icon = HTMLGen.Icon(Class="icon")
-            icon.append(image)
-            new_button.append(icon)
-            new_button.append(self.c_lang("report problem"))
-            another_div_collapsible = HTMLgen.Div( id = 'content' , style="display: none" ) 
-            
-
-            text = self.c_lang( "Save")
-            form = HTMLgen.Form( cgi="%s"%SCRIPT, submit=HTMLgen.Input(type='submit',value=text))
-            
-            present_time_string = datetime.datetime.strftime(datetime.datetime.now(), '%Y-%m-%d %H:%M:%S')
-
-            form.append( HTMLgen.Input( type='hidden', name="id", value="%s"%(idict.value('id'))))
-            form.append( HTMLgen.Input( type='hidden', name="uid", value="%s"%(idict.value('uid'))))
-            form.append( HTMLgen.Input( type='hidden', name="name", value="%s %s"%(idict.value('prenom'), idict.value('nom'))))
-            form.append( HTMLgen.Input( type='hidden', name="submitter", value="%s"%(self.login_dict.value('uid'))))              
-            form.append( HTMLgen.Input( type='hidden', name="submitter_name", value="%s %s"%(self.login_dict.value('prenom'), self.login_dict.value('nom'))))            
-            form.append( HTMLgen.Input( type='hidden', name="date_submitted", value="%s"%(present_time_string)))            
-            form.append( HTMLgen.Textarea( name="problem_report", rows=4, cols=100, text=""))
-            form.append( HTMLgen.Input( type='hidden', name="action", value='save_problem'))
-            form.append( HTMLgen.BR())
-       
-            describe_problem = self.c_lang( "Describe Problem")
-            another_div_collapsible.append(describe_problem) 
-            another_div_collapsible.append(form)           
-            
-            div.append(new_button)
-            div.append(another_div_collapsible)
-            div_collapsible.append(div)
-        
-        
-        #+++++++++++++++++++++++++++++++++++++++++++++
-        
-        
-        td.append(div_collapsible)
+#        button = HTMLGen.Button(type="button", Class="collapsible")
+#        button.append(self.c_lang("details"))
+#        td.append(button)
+#        div_collapsible = HTMLgen.Div( id = 'content' , style="display: none" ) # Make collapsible initially collapsed
+#        div_collapsible.append(table_footer)
+#        td.append(div_collapsible)
         
         
         # td.append(table_footer)
@@ -1773,19 +1509,7 @@ class FamilyTree:
         dedit.append(dedit_item)
         
         self.descendants_counter =0 
-        
-        deditx = HTMLgen.Div(id = 'children')
-        tabela_children = self.get_tabela_children(idict, uid, IMAGE_GRANDCHILD_PICTURE_SIZE, GENERATIONS_LIMIT)
-        deditx.append(tabela_children)
-        
-        #PL text = "Potomkowie"
-        text = self.c_lang( "Descendants") + " %s"%self.descendants_counter
-        
-        dedit.append(text)
-        dedit.append(deditx)
-        
-        dedit.append(self.get_add_chilren_table(uid, idict))
-        
+               
         return dedit
 
     def get_add_chilren_table(self, uid, idict):
@@ -1820,29 +1544,31 @@ class FamilyTree:
             table.append(tr)
   
             # LINKING CHILD IS ANABLE ONLY FOR SUPER USERS 
-            if self.am_i_superuser():
-                tr = self.get_connect_child(uid, idict)
-                table.append(tr) 
+#            if self.am_i_superuser():
+#                tr = self.get_connect_child(uid, idict)
+#                table.append(tr) 
         return table        
     
     
-    def am_i_superuser(self):
-        superuser = self.login_dict.value('SUPERUSER')
-        if superuser == "1":
-            return True
-        else:
-            return False
-        return False
+#    def am_i_superuser(self):
+#        return False
+#        superuser = self.login_dict.value('SUPERUSER')
+#        if superuser == "1":
+#            return True
+#        else:
+#            return False
+#        return False
 
     def calculate_date( date, years):
         year = str(int(date[:4]) + years)
-        return "%s%s"%(year, date[4:])
+        return "%s%s"%(year, data[4:])
 
 
 
 
 
     def check_permission_to_edit(self, person):
+        return False 
         self.msg = ''
         me = self.login_dict
         if  person.value('uid') == me.value('uid'):
@@ -1885,10 +1611,10 @@ class FamilyTree:
             self.msg += " %s %s %s"%(text, person.value('owner_uid'), self.owner_uid)
             return True
 
-        if  self.am_i_superuser():
-            text = self.c_lang( "as SUPERUSER"  )                                 
-            self.msg += "%s "%(text)
-            return True
+#        if  self.am_i_superuser():
+#            text = self.c_lang( "as SUPERUSER"  )                                 
+#            self.msg += "%s "%(text)
+#            return True
 
         return False
 
@@ -2077,8 +1803,8 @@ class FamilyTree:
         if self.is_it_myself(idict):
             hidden_items_list = hidden_for_editing_by_myself
         
-        if self.am_i_superuser(): 
-            hidden_items_list = hidden_for_editing_by_super      
+#        if self.am_i_superuser(): 
+#            hidden_items_list = hidden_for_editing_by_super      
         
         for c in self.column_names[0:]:
             if c in hidden_items_list:
@@ -2096,16 +1822,8 @@ class FamilyTree:
             else:
                 tr = HTMLgen.TR( )
                 td = HTMLgen.TD( align="right" )
-                
-                
-                text = self.c_lang(c)                
-                no_break = HTMLgen.Nobr()
-                no_break.append("%s :"%(text))
-                div = HTMLgen.Div(id = "columns")
-                div.append(no_break)
-                td.append(div)
-                
-                # s = "%s :"%(text)
+                text = self.c_lang(c)
+                s = "%s :"%(text)
 
                 input = HTMLgen.Input( type='text', name="%s"%c, value="%s"%idict.value(c) , size="60")
                 if c == 'notes':
@@ -2148,7 +1866,7 @@ class FamilyTree:
                     
 
 
-                # td.append(s)
+                td.append(s)
                 tr.append(td)
                 td = HTMLgen.TD()
         
@@ -2301,7 +2019,7 @@ class FamilyTree:
                 date = datetime.datetime.now() # '2014-12-05 17:45:00' 
                 date = str(date.strftime("%Y-%m-%d %H:%M:%S"))
                 values ="'%s','%s','%s','%s', '%s'"%(date, ip,command, new_result, diff)
-                sql="INSERT INTO results(date, ip, command, result, diff) VALUES(%s);" % values
+                sql="INSERT INTO results(date, ip, command, result, diff) VALUES(%s);"%(values)
                 # print sql
                 doc.append(HTMLgen.Heading(6,"Updated '%s' for %s with value:"%(command, ip)))
                 doc.append(HTMLgen.PRE("%s"%(new_result)))
@@ -2316,212 +2034,36 @@ class FamilyTree:
             column_names.append(i[0])
         self.column_names = column_names
  
-        columns = self.sql_execute('DESCRIBE %s'%TRANSLATIONS)                                    
+        columns = self.sql_execute('DESCRIBE %s'%TRANSLATIONS)
+                                            
         column_names=[]
         for i in columns:
             column_names.append(i[0])
         self.translations_column_names = column_names
         
-        
-        columns = self.sql_execute('DESCRIBE %s'%PROBLEMS_REPORT_TABLE)                               
-        column_names=[]
-        for i in columns:
-            column_names.append(i[0])
-        self.problems_column_names = column_names[1:] # Skip 'indeks' column
-
-    def place_person(self, x, y, person, ring=2):
-        RADIUS = 90
-        COLOR = 'white'
-        FRAME_COLOR = 'rgb(20,250,20)'
-        FRAME_WIDTH = '10'
-        WIDTH =  '160'
-        HEIGHT = '160' 
-        X_OFF =  '20'  # 200 = WIDTH/2
-        Y_OFF =  '20'  # 200 = HEIGHT/2
-        CORNER = '20'
-                                
-        out = ''   
-        name = "%s %s"%(person['prenom'], person['nom'])
-        uid = person['uid']
-        picture = "%s"%(self.get_picture(person) )
-        
-        genre ='f'
-        if person.g():
-            genre = 'm'
-            FRAME_COLOR = 'rgb(20,150,20)'    
-            
-        out += '<symbol id="%s">'%(uid)
-        
- 
-
-        if self.styl in [0,1]:
-            # Zielony kwadrat 
-            out += '<rect x="%s" y="%s" rx="%s" ry="%s" width="%s" height="%s" style="fill:%s ;stroke-width:%s;stroke:%s" />'%(X_OFF, Y_OFF, CORNER, CORNER, WIDTH, HEIGHT, COLOR, FRAME_WIDTH, FRAME_COLOR)
-
-        if self.styl in [2,3,5]:
-            # Zielone kółeczko 
-            out += '<circle cx="%s" cy="%s" r="%s"  stroke="%s" stroke-width="%s" fill="%s"  />\n'%(100,100,  RADIUS, FRAME_COLOR, FRAME_WIDTH, COLOR)   
-
-        if self.styl in [1,3]:    
-            out += '<use x="10" y="10" transform="scale(1.0) translate(0,0)" xlink:href="#leaf%s%s"  filter="url(#Blur)" />'%(ring, genre)    
-            
-        img = '<image xlink:href="%s" x="%s" y="%s" width="90" height="120" <desc>%s</desc></image>'%(picture, 60, 35, name)
-        out += '<a xlink:href="?action=show_tree&uid=%s"> %s </a>'%(uid, img)     
-        out += '<a xlink:href="?action=show&uid=%s"> <text text-anchor="middle" style="font-family:Verdana;font-size:10"  x="%s" y="%s">%s</text></a>'%(uid, 100, 165, name)
-
-        if self.styl >= 4:   
-            # Zielone Listki
-            out += '<use x="1" y="1" transform="scale(1.0) translate(0,0)" xlink:href="#ring%s%s"  filter="url(#Blur)" />'%(ring, genre)    
-               
-        out += '</symbol>' 
-        out += '<use x="%s" y="%s" transform="scale(1.0) translate(0,0)" xlink:href="#%s"  />'%(x,y, uid)            
-        return out
-
-    def place_person_with_ancestors(self, gen, x_distance, y_distance, x, y, person):   
-        RADIUS = 90
-        COLOR = 'white' 
-        out = ""
     
-        if gen > 5 :
-            return out
-        gen += 1 
+    def main(self, Sender, Recipient, emailid):
         
-        ring = gen
-        if ring > 6: ring = 6
-        if ring < 1: ring = 1        
-                    
-        if int(person.papa()) > 0:
-            p = self.get_dict(person.papa())                      
-            out += self.place_person_with_ancestors(gen, x_distance/2, y_distance, x-x_distance, y-y_distance, person=p )
-            
-        if int(person.mama()) > 0:
-            m = self.get_dict(person.mama())                      
-            out += self.place_person_with_ancestors(gen, x_distance/2, y_distance, x+x_distance, y-y_distance, person=m )
-
-        out += self.place_person(x,y,person, ring=gen)
-
-        return out
-    
-    
-    def show_tree(self, row, children, uid, owner_uid):    
-
-        #KP debugging
-        # doc.append(sql)
-        width = 2000
-        height =1600
-        X_CENTER = 1000
-        Y_CENTER = 600
-        SCALE = 0.7
-           
-        person = self.get_dict(uid)
-                
-        svg = '<center><svg width="%s" height="%s"><g transform="scale(%s)">'%(width, height, SCALE) 
+        self.login_dict = Recipient
+        self.idict = Sender
         
-
-        
-        doc = []
-        filters = Leafs.Filters()
-        doc.append(filters.get())
-
-        scale = {1:0.25, 2:0.27, 3:0.30, 4:0.34, 5:0.36, 6:0.40}
-        for i in range(1,7):
-            leaf = Leafs.Leaf(name='leaf%s'%(i), scale=scale[i])    
-            doc.append(leaf.get('f'))
-
-        scale = {1:0.25, 2:0.27, 3:0.30, 4:0.34, 5:0.36, 6:0.40}
-        for i in range(1,7):
-            for genre in ['m','f']:
-                leaf = Leafs.Leaf(name='leaf%s%s'%(i,genre), scale=scale[i])    
-                doc.append(leaf.get(genre))
-                  
-
-        leafs_number = {1:26, 2:24, 3:22, 4:20, 5:18, 6:16}
-        for i in range(1,7):
-            for genre in ['m','f']:
-                ring = Leafs.Reef(name='ring%s%s'%(i,genre), leaf_name='leaf%s%s'%(i,genre), leaf_scale=0.1, leafs_number=leafs_number[i],  radius=100)
-                doc.append(ring.get())
-                
-        leafs_number = {1:26, 2:24, 3:22, 4:20, 5:18, 6:16}
-        for i in range(1,7):
-            ring = Leafs.Reef(name='ring%s'%(i), leaf_name='leaf%s'%(i), leaf_scale=0.1, leafs_number=leafs_number[i],  radius=100)
-            doc.append(ring.get())
-                
-        
-        svg += '\n'.join(doc)
- 
-        # svg += '\n \n'.join(children)    
-        
-        #  doc.append('<use x="0" y="0" transform="translate(0,0)" xlink:href="#ring"  filter="url(#Blur)" />')
-
-        if person.conj() >0:        
-            svg += self.place_person( X_CENTER+130, Y_CENTER+10, self.get_dict(person.conj()), ring=3)         
-        
-        # svg += self.place_person_with_ancestors(3, x_distance=200, y_distance=120, x=600, y=400, person=person)
-        svg += self.place_person_with_ancestors(2, 300, 150, X_CENTER, Y_CENTER, person) 
-
-
-                
-        
-        i = 0
-        n = len(children)
-        start = X_CENTER - (100*(n-1) )
-        for child_row in children:
-            child = self.convert_sqlrow_to_dict(child_row)
-            # svg += self.place_person_with_ancestors(5, 300, 150, start+200*i, Y_CENTER+200, child)
-            svg += self.place_person( start+200*i, Y_CENTER+200, child, ring=2 )
-            i += 1
-        svg += '</g></svg></center>'
-
-        return svg
-    
-    def save_history(self, uid):
-      
-        # Update nuke_history table excepty id which in this table is not copied from nuke_genealogy
-        try:
-            sql = "SELECT * FROM %s WHERE uid='%s';"%(TABLE,uid)
-            row = self.sql_execute(sql)
-
-            # values_for_history = self.convert_sqlrow_to_dict(row)
-            values_for_history = row[0]                
-
-            values_for_history = ",".join("'%s'"%(i) for i in row[0])  
-            f = ",".join(self.column_names)
-            sql_history= "INSERT INTO %s(%s) VALUES (%s) ;"%(HISTORY, f, values_for_history)
-            self.sql_execute_and_commit(sql_history)
-        except:
-            pass
-        
-    def save_login_history(self, action):
-        
-        try:
-            login_name = "%s %s"%(self.login_dict.value('prenom'), self.login_dict.value('nom'))
-            login_uid = self.login_dict.value('uid')
-            date_logged = datetime.datetime.strftime(datetime.datetime.now(), '%Y-%m-%d %H:%M:%S')
-            show_uid =  "%s"%(self.idict.value('uid'))
-            show_name = "%s %s"%(self.idict.value('prenom'), self.idict.value('nom'))
-
-            values_for_login_history = "%s, '%s', %s, '%s', '%s', '%s'"%(login_uid, login_name, show_uid, show_name, action, date_logged)   
-            f = "login_uid, login_name, show_uid, show_name, action, date_logged"
-            sql_login_history= "INSERT INTO %s(%s) VALUES (%s) ;"%(LOGIN_HISTORY, f, values_for_login_history)
-            self.sql_execute_and_commit(sql_login_history)
-        
-        except: 
-            pass
-
-    
-    def main(self, form, login_uid):
-        
-        self.login_dict = self.get_dict(login_uid)
         self.set_theme()
-        self.set_themes()
+        # self.set_themes()
+        self.prefered_language = Recipient.value('pref_lang')
+        # print "PREFERED LANGUAGE %s"%self.prefered_language
         
         stylesheets = [ "%s/%sgenealogy_style.css"%(IMAGES, self.theme['directory']) , 
                        "https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/css/bootstrap.min.css"]
         
         # scripts = ["../js/sorttable.js", "../js/clickable.js"]
         
+        
+        style_for = ""
+
+        # scripts = ["", ""]
         scripts = []
         meta = '<META HTTP-EQUIV="Content-Type" content="text/html; charset=ISO-8859-2">'
+        meta = ''
     
         doc_simple  = HTMLGen.SimpleDocument(cgi="True", 
                                              screen_capture_injected="true", 
@@ -2529,584 +2071,134 @@ class FamilyTree:
                                              title="Family Tree", 
                                              stylesheet=stylesheets, 
                                              script=scripts,
-                                             style=style_for_collapsing)
+                                             style=style_for)
      
         doc = HTMLgen.Div(id = 'main')         
 
         sql = ''
         # Create instance of FieldStorage 
-        # form = cgi.FieldStorage()         
-    
-        # Get data from fields
-        action = form.getvalue('action')
-        uid     = form.getvalue('uid')
-        
-        if uid is None: uid = login_uid 
-        id      = form.getvalue('id')
-        order = form.getvalue('order')
-        checkbox = form.getvalue('checkbox')
-        checkboxid = form.getvalue('checkboxid')
-        owner_uid = form.getvalue('owner_uid')
-        dob = form.getvalue('dob')
-        nom = form.getvalue('nom')
-        prenom = form.getvalue('prenom')
-        genre = form.getvalue('genre')
-        # this is for file upload
-        dfile_name = form.getvalue('file_name')
-        prefix = form.getvalue('prefix')
-        profile_picture = form.getvalue('profile_picture') 
-        styl = form.getvalue('styl')
-                    
-        self.idict = self.get_dict(uid)
-        
-        self.styl = 0 
-        try:
-            if int(styl) > 0:
-                self.styl = int(styl) 
-        except:
-            pass        
-        
-        MAX_SIZE = 6*1024*1024
-        valid_extentions = ['jpg','gif','jpeg']
-        path_start = ''
-
-        if action == None: action = 'show'
-        if order == None: order = "0"
-        if owner_uid == None: 
-            owner_uid= '1'
-        self.owner_uid = owner_uid
-        if id == None: id=0
-        if uid == None: uid = login_uid
-        if nom == None: nom = ""
-        if prenom == None: prenom = ""
-        if dob == None: dob = ""
-    
-
-        if form.has_key('file'):
-            fileitem = form['file']
-        
-            if fileitem.filename:
-            # if fileitem.filename:
-                # strip leading path from file name to avoid directory traversal attacks^M
-                fname = os.path.basename(fileitem.filename)
-
-                file_name,extention = fname.split('.')
-                ext = extention.lower()
-                if ext in valid_extentions:
-                    if dfile_name == '':
-                        filename= "%s.%s"%(file_name, ext) 
-                        destination = "%s/%s"%(PATH_TO_PICTURES, filename)  # /var/data/abcd.jpg 
-                    else:
-                        if prefix == 'YES':
-                            timestamp = datetime.datetime.strftime(datetime.datetime.now(), '%Y-%m-%d-%H-%M-%S')
-                            filename= "%s_%s.%s"%(dfile_name, timestamp, ext) 
-                            destination = "%s/%s"%(PATH_TO_PICTURES, filename) 
-                              # /var/data/500_2015-12-23-12-03-34.jpg 
-                        else:
-                            filename= "%s.%s"%(dfile_name, ext) 
-                            destination = "%s/%s"%(PATH_TO_PICTURES, filename) 
-                              # /var/data/500.jpg 
-
-                    file = fileitem.file.read()
-                    # Check file type, and size etc
-                    size = len(file)
-                    if size < MAX_SIZE:
-                        abs_destination = "%s%s"%(path_start,destination)
-                        open( abs_destination, 'wb').write(file)
-                        msg = 'SUCCESS: The file %s of size %s was uploaded under name %s '%(file_name, size, destination)
-                        
-                        logger.info("INFO: %s"%(msg))
-                        
-                        doc.append('profile picture %s'%profile_picture) 
-                        if profile_picture == 'YES':
-                            sql = "UPDATE  `%s` SET  `picture_id` = '%s' WHERE `uid`='%s';"%(TABLE, filename, uid)
-                            self.sql_execute_and_commit(sql)
-                    else:
-                        msg = "ERROR: File size %s is too big >%s"%(size, MAX_SIZE)
-                        logger.error("ERROR: %s"%(msg))                                
-                else:
-                    msg = 'ERROR: File extention is %s. Must be %s'%(ext,  valid_extentions)
-                    destination = "  %s"%(file_name)
-                    logger.error("ERROR: %s"%(msg))
-
-            else:
-                msg = 'ERROR: File was not uploaded'
-                logger.error("ERROR: %s"%(msg))
-    
-
-        PARAMS = ",".join(["%s=%s"%(i,form.getvalue(i)) for i in form.keys()])
-        # cur = self.con.cursor()
+        # form = cgi.FieldStorage()       
     
         # wczytaj parametry zalogowanego uzytkownika
         
-        # sql = "SELECT * FROM %s WHERE uid='%s';"%(TABLE, login_uid)
-        # row = self.sql_execute(sql)
-        # self.login_dict = self.convert_sqlrow_to_dict(row[0])
+        login_uid = self.login_dict.value('uid')
+        sql = "SELECT * FROM %s WHERE uid='%s';"%(TABLE, login_uid)
+        row = self.sql_execute(sql)
+        self.login_dict = self.convert_sqlrow_to_dict(row[0])
         
-        self.save_login_history(action)
+        
+        uid = self.idict.value('uid')
+        
+        div = HTMLgen.Div(id = "item")
         
         
-        doc_simple.append(self.show_menu(uid))
-    
-       
-        if True:     
-            if action == 'delete':
-                sql="DELETE FROM %s WHERE id='%s';"%(TABLE, id)
-            
-            if action == 'add':
-                f = ",".join(self.column_names)
-                values =",".join([ "'%s'"%form.getvalue(i) for i in self.column_names[1:]])
-                sql="INSERT INTO %s(%s) VALUES(%s);"%(TABLE, f, values)                
-                self.sql_execute_and_commit(sql)
-                action = "show"               
+        if Sender.g():
+            sender_he_she = "he"  #
+        else:
+            sender_he_she = "she"  # 
         
-            if action == 'save':
-                v = {}
-                values = ''
-                period =''
-                for i in self.column_names[1:]:
-                    v= form.getvalue(i)
-                    if v is None : v = ''
+        if Recipient.g():
+            recip_he_she = "male"   # Twoj 
+        else:
+            recip_he_she = "female" # Twoja
         
-                    # values =",".join([ "`%s`='%s'"%(i, v[i]) for i in self.column_names[1:] ])
-            
-                    if i in dates_items and v == '':
-                        values +=  "%s`%s`= NULL "%(period,i) 
-                    else: 
-                        values +=  "%s`%s`='%s'"%(period,i, v) 
-                    period =','    
-                
-                # Update nuke_history table excepty id which in this table is not copied from nuke_genealogy
-                self.save_history(uid)                
-                
-                sql="UPDATE `%s` SET %s WHERE `%s`.`uid`=%s;"%(TABLE, values, TABLE, uid)
-                self.sql_execute_and_commit(sql)
-                action = "show"
-            
-            if action == 'edit':
-                sql = "SELECT * FROM %s WHERE uid='%s';"%(TABLE, uid)                                        
-                row = self.sql_execute(sql)
-
-                doc.append(self.edit_item(row, uid))
-            
-            if action == 'add_parent':
-                genre = form.getvalue('genre')
-                dwarning = HTMLgen.Div(id = 'warning')
-                dwarning.append(self.c_lang('do not create a new person'))
-                dwarning.append(HTMLgen.BR())
-                dwarning.append(self.c_lang('if this person exists use option link'))
-                
-                doc.append(dwarning)
-                dict = Dict( genre=genre, uid= self.get_new_uid())
-                doc.append(self.add_parent(dict, uid))
-
-            if action == 'save_parent':
-                v = {}
-                for i in self.column_names:
-                    v[i]= form.getvalue(i)
-                    if v[i] is None : v[i] = ''
+        br =HTMLgen.BR()
         
-                uid = form.getvalue('uid')
-                child_uid = form.getvalue('child_uid')
-                _list =",".join([ "`%s`"%(i) for i in self.column_names ])
-                values =",".join([ "'%s'"%(v[i]) for i in self.column_names ])
-                sql="INSERT INTO `%s` (%s) VALUES (%s) ;"%(TABLE, _list, values)
-                self.sql_execute_and_commit(sql)
-
-                self.save_history(child_uid)   
-                
-                if form.getvalue('genre') == '1':
-                    sql = "UPDATE  `%s` SET  `pere` = '%s' WHERE `uid`='%s';"%(TABLE, uid, child_uid)
-                else:
-                    sql = "UPDATE  `%s` SET  `mere` = '%s' WHERE `uid`='%s';"%(TABLE, uid, child_uid)
-                self.sql_execute_and_commit(sql)
-
-                action = 'show' 
-            
-            if action == 'add_spouse':
-                genre = form.getvalue('genre')
-                dwarning = HTMLgen.Div(id = 'warning')
-                dwarning.append(self.c_lang('do not create a new person'))
-                dwarning.append(HTMLgen.BR())
-                dwarning.append(self.c_lang('if this person exists use option link' ))
-
-                idict = Dict( genre=genre, uid= self.get_new_uid(), conjoint=uid)
-                doc.append(dwarning)
-                doc.append(self.add_spouse(idict, uid))
-                action = 'show' 
-
-            if action == 'save_spouse':
-                v = {}
-                for i in self.column_names:
-                    v[i]= form.getvalue(i)
-                    if v[i] is None : v[i] = ''
+        # header = "%s %s zaprosi\xb3%s Ci\xea do rodzinnego drzewa genealogicznego DRZEWO.ME"%( Sender.value('prenom'), Sender.value('nom'), g)
+        text = "%s invited you to the genealogy tree"%(sender_he_she)
+        text = self.c_lang(text)
+        header = "%s %s %s"%( Sender.value('prenom'), Sender.value('nom'), text)
+        strong = HTMLgen.Strong(header)
+        div.append(strong)  
+        div.append(br)
         
-                uid = form.getvalue('uid')
-                spouse_uid = form.getvalue('spouse_uid')
-                _list =",".join([ "`%s`"%(i) for i in self.column_names ])
-                values =",".join([ "'%s'"%(v[i]) for i in self.column_names ])
-                sql="INSERT INTO `%s` (%s) VALUES (%s) ;"%(TABLE, _list, values)
-                self.sql_execute_and_commit(sql)
-  
-                self.save_history(spouse_uid)   
-
-                sql = "UPDATE  `%s` SET  `conjoint` = '%s' WHERE `uid`='%s';"%(TABLE, uid, spouse_uid)
-                self.sql_execute_and_commit(sql)
-                action = 'show' 
-            
-            if action == 'add_child':
-                dwarning = HTMLgen.Div(id = 'warning')
-                dwarning.append(self.c_lang('do not create a new person'))
-                dwarning.append(HTMLgen.BR())
-                dwarning.append(self.c_lang('if this person exists use option link' ))
-                # dwarning.append(HTMLgen.BR())
-                # dwarning.append('wycofaj si\xea i wybierz opcje Do\xb3\xb1cz (-->)!')
-
-                genre = form.getvalue('genre')
-                parent_idict = self.get_dict(uid)
-                if parent_idict.value('genre') > 0:
-                    child_dict = Dict( genre=genre, uid= self.get_new_uid(), pere=uid)
-                else:
-                    child_dict = Dict( genre=genre, uid= self.get_new_uid(), mere=uid)
-
-
-                doc.append(dwarning)
-                doc.append(self.add_child(child_dict, uid))
-
-            if action == 'save_child':
-                v = {}
-                for i in self.column_names:
-                    v[i]= form.getvalue(i)
-                    if v[i] is None : v[i] = ''
+        r = Relations.Relation()
+        relation = r.get_relationship(Recipient.value('uid'), Sender.value('uid'))
+        if relation == "":
+            pass
+        else:
+            relation = self.c_lang(relation)
+            text = "is for you"
+            text_is = self.c_lang(text)
+            header = "%s %s %s : %s"%( Sender.value('prenom'), Sender.value('nom'), text_is, relation)
+            strong = HTMLgen.Strong(header)
+            div.append(strong)  
+            div.append(br)
         
-                parent_uid = form.getvalue('parent_uid')
-                child_uid = form.getvalue('child_uid')
-                _list =",".join([ "`%s`"%(i) for i in self.column_names ])
-                values =",".join([ "'%s'"%(v[i]) for i in self.column_names ])
-                sql="INSERT INTO `%s` (%s) VALUES (%s) ;"%(TABLE, _list, values)
-                self.sql_execute_and_commit(sql)
-                
-                idict = self.get_dict(parent_uid)
-                
-                self.save_history(child_uid)   
-                
-                if idict.value('genre') > 0:
-                    sql = "UPDATE  `%s` SET  `pere` = '%s' WHERE `uid`='%s';"%(TABLE, uid, child_uid)
-                else:
-                    sql = "UPDATE  `%s` SET  `mere` = '%s' WHERE `uid`='%s';"%(TABLE, uid, child_uid)
-
-                self.sql_execute_and_commit(sql)
-                action = 'show'                 
-                
-                
-            if action == 'save_translation':                                    
-                v = {}
-                
-                column_names = self.translations_column_names 
-                for i in column_names:
-                    v[i]= form.getvalue(i)
-                    if v[i] is None : v[i] = ''
-                
-                auto_increment = v['auto_increment']
-                translation = v['translation']
-                
-                if auto_increment == "0":
-                    # new entry must be inseted
-                    _list =",".join([ "`%s`"%(i) for i in column_names ])
-                    values =",".join([ "'%s'"%(v[i]) for i in column_names ])
-                    sql="INSERT INTO `%s` (%s) VALUES (%s) ;"%(TRANSLATIONS, _list, values)
-                    self.sql_execute_and_commit(sql)
-
-                else:
-                    # Not new must be update
-                    sql = "UPDATE `%s` SET  `translation` = '%s' WHERE `auto_increment`='%s';"%(TRANSLATIONS, translation, auto_increment)
-                    self.sql_execute_and_commit(sql)
-
-                action = 'show'     
-
-
-            if action == 'save_problem':                                    
-                v = {}
-                
-                column_names = self.problems_column_names 
-                for i in column_names:
-                    v[i]= form.getvalue(i)
-                    if v[i] is None : v[i] = ''
-    
-                # problem = v['problem_report']
-                # new entry must be inseted
-                _list =",".join([ "`%s`"%(i) for i in column_names ])
-                values =",".join([ "'%s'"%(v[i]) for i in column_names ])
-                sql="INSERT INTO `%s` (%s) VALUES (%s) ;"%(PROBLEMS_REPORT_TABLE, _list, values)
-                self.sql_execute_and_commit(sql)
-
-                action = 'show'     
-                
-            
-            if action == 'rlink_papa':
-                uid = form.getvalue('uid')
-                papa_uid = form.getvalue('who')
-                self.save_history(uid)   
-                sql = "UPDATE  `%s` SET  `pere` = '%s' WHERE `uid`='%s';"%(TABLE, papa_uid, uid)
-                self.sql_execute_and_commit(sql)
-
-                action = 'show' 
-
-            if action == 'rlink_mama':
-                uid = form.getvalue('uid')
-                mama_uid = form.getvalue('who')
-                self.save_history(uid)   
-                sql = "UPDATE  `%s` SET  `mere` = '%s' WHERE `uid`='%s';"%(TABLE, mama_uid, uid)
-                self.sql_execute_and_commit(sql)
-
-                action = 'show' 
-            
-            if action == 'rlink_spouse':
-                uid = form.getvalue('uid')
-                spouse_uid = form.getvalue('who')
-                self.save_history(uid)   
-                sql = "UPDATE  `%s` SET  `conjoint` = '%s' WHERE `uid`='%s';"%(TABLE, spouse_uid, uid)
-                self.sql_execute_and_commit(sql)
-
-                # Te trzy linie dopisuja linka w rekordzie spouse wskazujacego na UID
-                # NIE MOZEMY TEGO ROBIC GDY NIE MAMY KONTROLI NA TYM WPISEM
-  
-                action = 'show' 
-            
-            if action == 'rlink_child':
-                uid = form.getvalue('uid')
-                idict = self.get_dict(uid)
-                child_uid = form.getvalue('who')
-                self.save_history(child_uid)   
-                if int(idict.value('genre')) > 0 :
-                    sql = "UPDATE  `%s` SET  `pere` = '%s' WHERE `uid`='%s';"%(TABLE, uid, child_uid)
-                else:               
-                    sql = "UPDATE  `%s` SET  `mere` = '%s' WHERE `uid`='%s';"%(TABLE, uid, child_uid)
-
-                self.sql_execute_and_commit(sql)
-                action = 'show' 
-            
-            if action in ['show', 'login', 'show_tree']:
-                sql = "SELECT * FROM %s WHERE uid='%s';"%(TABLE,uid)
-                row = self.sql_execute(sql)
+        uid = Recipient.value('uid')
+        # header = "Tw\xf3j osobisty identyfikator jest : %s"%uid
+        text = "your personal identifier is"
+        text = self.c_lang(text)
+        header = "%s : %s"%(text, uid)
+        strong = HTMLgen.Strong(header)
+        div.append(strong)   
+        div.append(br)
         
-                if row[0][2] == 1: # 0 Kobieta 1 Mezczyzna
-                    # Dla kobiet
-                    # Szukaj osob ktore maja wpisane uid w polu mere/matka
-                    # mere = row[0][13]
-                    # doc.append(mere)
-                    sql = "SELECT * from %s WHERE pere='%s' ORDER BY  `naissance` ASC ;"%(TABLE,uid)                        
-                    children = self.sql_execute(sql)
-                else:
-                    # Dla mezczyzn
-                    # Szukaj osob ktore maja wpisane uid w polu pere/ojciec
-                    # pere = row[0][12]
-                    # doc.append(pere)
-                    sql = "SELECT * from %s WHERE mere='%s' ORDER BY  `naissance` ASC ;"%(TABLE,uid)
-                    children = self.sql_execute(sql)
+        key = self.get_key(uid)
         
+        # header = "A Tw\xf3j klucz : %s"%key
+        text = "your key is"
+        text = self.c_lang(text)
+        header = "%s : %s"%(text, key)
+        strong = HTMLgen.Strong(header)
+        div.append(strong)
+        div.append(br)
+        
+        text = "Kliknij w ten link aby potwierdzi\xe6 odebranie tej wiadomo\xb6ci"
+        text = "click here to confirm reception of this invitation"
+        text = self.c_lang(text)
+        url = "https://drzewo.me/tr/drzewo.py?action=accepted&uid=%s&key=%s&emailid=%s"%(Recipient.value('uid'),key, emailid)
+        #######################################################################
+        #######################################################################
+        # CHANGE URL TO drzewo.py when promoting file dr.py to drzewo.py 
+        #######################################################################
+        #######################################################################
+        # url = "https://drzewo.me/tr/drzewo.py?action=accepted&uid=%s&key=%s&emailid=%s"%(Recipient.value('uid'),key, emailid)
+        href = HTMLgen.Href(url, text)
+        div.append(href)
+        div.append(br)    
+        
+        text = "Kliknij w ten link aby zalogowa\xe6 si\xea do drzewa przy pomocy identyfikatora i klucza"
+        text = "click here to log into the tree using your personal ID and key"
+        text = self.c_lang(text)
+        url = "https://drzewo.me"
+        href = HTMLgen.Href(url, text)
+        div.append(href)
+        div.append(br)
+        
+        text = "Kliknij w ten link aby wej\xb6\xe6 do drzewa Twoim osobistym kluczem dost\xeapu"
+        text = "click here to log into the tree using a personalized link"
+        text = self.c_lang(text)
+        url = "https://drzewo.me/tr/drzewo.py?action=login&uid=%s&key=%s"%(Recipient.value('uid'), key)
+        href = HTMLgen.Href(url, text)
+        div.append(href)
+        div.append(br)
+        div.append(HTMLgen.HR())
+        
+        
+        doc_simple.append(div)
+      
                 
-            if action in ['show_tree']:
-                svg = self.show_tree(row[0], children, uid, owner_uid)
-                doc_simple.append(svg)                
-
-            if action in ['link_mama','link_papa','link_child', 'link_spouse']:
-                wh = []
-                if (prenom != ""): 
-                    wh.append("prenom LIKE '%s'"%(prenom))
-                if (nom != ""): 
-                    wh.append("nom LIKE '%s'"%(nom))
-                if not (genre is None): 
-                    wh.append("genre='%s'"%(genre))
-
-                if action in ['link_mama','link_papa']:
-                    if not (dob is None) and not (dob == ''): 
-                        wh.append("naissance < '%s'"%(dob))  # Tylko osoby starsze od daty urodzenia we wpisie 
-
-                if action in ['link_child']:
-                    if not (dob is None) and not (dob == ''): 
-                        wh.append("naissance > '%s'"%(dob))  # Tylko osoby starsze od data urodzenia we wpisie 
-
-                # ADD HERE to wh SQL LIMIT 
-
-                where = " AND ".join(wh)
-
-                sql = "SELECT * from %s WHERE %s;"%(TABLE, where)
-                rows = self.sql_execute(sql)
-
-                doc.append(self.show_search_results(rows, action, genre, uid, prenom, nom, dob))
-
-            if action in ['list']:
-                sql = "SELECT * FROM %s ORDER BY `change_time` DESC LIMIT 50;"%(TABLE)
-                rows = self.sql_execute(sql)
-                doc.append(self.show_list(rows))
-
-            if action in ['show_pictures']:
-                sql = "SELECT * FROM %s ORDER BY `change_time` DESC LIMIT 50;"%(TABLE)
-                rows = self.sql_execute(sql)
-                                            
-                idict = self.get_dict(uid)
-                doc.append(self.show_pictures(idict = idict))
- 
- 
-            # print sql
-            if action in ['show', 'delete', 'add', 'save', 'disable', 'enable']: 
-                if sql is not '':
-                    self.sql_execute_and_commit(sql)           
-                    
-            if action in ['invite']:
-                uid = form.getvalue('uid')
-                idict = self.get_dict(uid)
-                email = idict.value('email')
-                sender_uid = self.login_dict.value('uid')
-                recipient_uid = uid 
-                date = datetime.datetime.now() # '2014-12-05 17:45:00' 
-                date_created = str(date.strftime("%Y-%m-%d %H:%M:%S"))
-                sql = "INSERT INTO `emails_to_send` (`email`, `sender_uid`, `recipient_uid`, `date_created`, `date_send`, `date_accepted`) VALUES ('%s', '%s', '%s', '%s', '', '') "%(email, sender_uid, recipient_uid, date_created)
-                rows = self.sql_execute_and_commit(sql)
-                action = "show"
-            
-            if action in ['accepted']:
-                logger.info("1 LOGGGGGGGGGGEEEEER: %s"%sql)
-                uid = form.getvalue('uid')
-                emailid = form.getvalue('emailid')
-                idict = self.get_dict(uid)
-                email = idict.value('email')
-                sender_uid = self.login_dict.value('uid')
-                recipient_uid = uid 
-
-                date = datetime.datetime.now() # '2014-12-05 17:45:00' 
-                date_accepted = str(date.strftime("%Y-%m-%d %H:%M:%S"))
-
-                sql = "UPDATE `%s` SET `date_accepted`='%s'  WHERE `id`='%s';"%(EMAILS_TO_SEND_TABLE, date_accepted, emailid )
-                logger.info("2 LOGGGGGGGGGGEEEEER: %s"%sql)
-                rows = self.sql_execute_and_commit(sql)
-                logger.info("3 LOGGGGGGGGGGEEEEER: %s"%sql)
-                action = "show"                                    
-                    
-            # Redraw page after any thing done        
-            if action in [ "show", "login" ]:    
-                doc.append(self.show_item(uid, owner_uid))      
-            
+        owner_uid = self.idict.value('owner_uid')        
+        doc.append(self.show_item(uid, owner_uid))          
     
         doc_simple.append(doc)
-        doc_simple.append(script_for_collapsing)
         
-        print(doc_simple) 
-        
-
-                
- 
-def login_screen( prompt = "Login"):
-
-#    stylesheets = [ "css/genealogy_style.css",
-#                    "css/style.css",
-#                     "https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/css/bootstrap.min.css"
-#                  ]
-    
-    stylesheets = [ "css/genealogy_style.css",
-                    "css/style.css"
-                  ]
-    
-    scripts = ["", ""]
-    meta = '<META HTTP-EQUIV="Content-Type" content="text/html; charset=ISO-8859-2">'
-    
-    doc_simple  = HTMLGen.SimpleDocument(cgi="True", screen_capture_injected="true", meta=meta,\
-                    title="Genealogia", stylesheet=stylesheets, script=scripts)
-     
-    doc = HTMLgen.Div(id = 'menu') 
-           
-    banner =   HTMLgen.Div(id = 'login')
-    banner.append('%s'%prompt)
-
-    tb = HTMLgen.TableLite(border=0, cell_spacing='10', cell_padding='20', width="auto", body=[], body_color="#AAFFAA")
-    tr = HTMLgen.TR()
-    td = HTMLgen.TD()
-
-
-    uid  = HTMLgen.Input( type='text', name="uid" )
-    key  = HTMLgen.Input( type='password', name="key" )
-    login  = HTMLgen.Input( type='hidden', name="action", value='login' )
-    
-    text = c_lng("Enter")
-    form = HTMLgen.Form( cgi="%s"%SCRIPT, submit=HTMLgen.Input(type='submit',value="Enter"))
-    
-    form.append(HTMLgen.BR())
-    text = c_lng("Identifier")
-    form.append("%s"%text)
-    form.append(HTMLgen.BR())
-    form.append(uid)
-
-    text = c_lng("Key")
-    form.append(HTMLgen.BR())
-    form.append('%s:'%text)
-    form.append(HTMLgen.BR())    
-
-    form.append(key)
-    form.append(HTMLgen.BR())
-    form.append(login)
-
-    form.append(HTMLgen.BR())
-
-    td.append(form)
-    tr.append(td)
-    tb.append(tr)
-    
-    doc.append(tb)
-
-    banner.append(doc)
-    
-    doc_simple.append(banner)
-
-    return str(doc_simple)
+        return str(doc_simple)    
         
 
-def logout_screen():
-    
-    stylesheets = [ "css/genealogy_style.css", "css/style.css"]
-    scripts = ["", ""]
-    meta = '<META HTTP-EQUIV="Content-Type" content="text/html; charset=ISO-8859-2">'
-    
-    doc_simple  = HTMLGen.SimpleDocument(cgi="True", screen_capture_injected="true", meta=meta,\
-                    title="Genealogia", stylesheet=stylesheets, script=scripts)
-     
-    doc = HTMLgen.Div(id = 'menu') 
-    demo = HTMLgen.Div(id = 'login') 
-           
-    banner =   HTMLgen.Div(id = 'login')
-    
-    #PL text = 'Wyszed\xB3e\xB6 z Drzewa'
-    text = c_lng( 'You left The Tree')
-    banner.append(text)
-    
-    doc_simple.append(banner)
-    
-    #PL text = 'wr\xF3\xE6 do Drzewa'
-    text = c_lng( 'Go back to The Tree')
-    href = HTMLgen.Href('%s'%SCRIPT,  text)
-    
-    doc.append(href)
-    banner.append(doc)
-    doc_simple.append(banner)
-
-    return str(doc_simple)
-
-
-def main_cookie():
-    form = cgi.FieldStorage() 
-    text = c_lng("Log to The Tree")
-    _cookie = LoginCookie(login_screen, logout_screen, prompt=text)
-    (login_uid, key, cont) = _cookie.test_login_cookie(form )
-    logger.info("INFO: Logged as %s %s %s  "%(login_uid, key, cont))
-    if cont:
-       tree = FamilyTree( login_uid)
-       tree.main(form, login_uid)
 
 
 if '__main__' == __name__:
-    try:   # NEW
-        # print("Content-type: text/html\n")   # say generating html
-        main_cookie()
-    except:
-        cgi.print_exception()
+
+    if True:     
+        emailer = Emailer(839397534, pref_lang = "PL")
+        emailer.run_emails()
+        
+        # print "DO NOT FORGET TO FLIP LINE 310  TO REAL EMAIL SERVER and 371 TO UPDATE MYSQL THAT EMAIL WAS SEND"
+        
+        # print emailer.c_lang("  you  are his father")
+    else:
+        # print "ERROR"
+        pass
                                              
